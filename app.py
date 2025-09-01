@@ -6,105 +6,88 @@ from datetime import datetime, timedelta
 def parse_time(time_str):
     return datetime.strptime(time_str, "%H:%M")
 
-# Calculate compensation for weekday
-def calculate_weekday_compensation(in_time, out_time):
-    in_dt = parse_time(in_time)
-    out_dt = parse_time(out_time)
-    if out_dt < in_dt:
-        out_dt += timedelta(days=1)
+# Calculate overlap with 20:00–07:00 window for weekdays
+def calculate_weekday_overlap(intervals):
+    overlap_minutes = 0
+    for start_str, end_str in intervals:
+        start = parse_time(start_str)
+        end = parse_time(end_str)
+        if end <= start:
+            end += timedelta(days=1)
 
-    # Define valid compensation window
-    start_window = parse_time("20:00")
-    end_window = parse_time("07:00") + timedelta(days=1)
+        # Define the rest window from 20:00 to 07:00 next day
+        rest_start = parse_time("20:00")
+        rest_end = parse_time("07:00") + timedelta(days=1)
 
-    overlap_start = max(in_dt, start_window)
-    overlap_end = min(out_dt, end_window)
+        # Calculate overlap
+        latest_start = max(start, rest_start)
+        earliest_end = min(end, rest_end)
+        delta = (earliest_end - latest_start).total_seconds() / 60
+        if delta > 0:
+            overlap_minutes += delta
+    return overlap_minutes
 
-    if overlap_start < overlap_end:
-        return overlap_end - overlap_start
-    else:
-        return timedelta(0)
-
-# Calculate compensation for weekend
-def calculate_weekend_compensation(start_times, end_times):
-    # Convert times to datetime objects
+# Calculate longest rest period for weekend
+def calculate_weekend_rest(intervals):
+    # Convert to datetime and sort
     times = []
-    for s, e in zip(start_times, end_times):
-        start = parse_time(s)
-        end = parse_time(e)
-        if end < start:
+    for start_str, end_str in intervals:
+        start = parse_time(start_str)
+        end = parse_time(end_str)
+        if end <= start:
             end += timedelta(days=1)
         times.append((start, end))
-
-    # Sort by start time
     times.sort()
+
+    # Add dygnsbryt at 07:00
+    dygn_start = parse_time("07:00")
+    dygn_end = dygn_start + timedelta(days=1)
+
+    # Add boundary intervals
+    times = [(dygn_start, dygn_start)] + times + [(dygn_end, dygn_end)]
 
     # Calculate rest periods between disturbances
     rest_periods = []
     for i in range(len(times) - 1):
         rest_start = times[i][1]
         rest_end = times[i + 1][0]
-        if rest_end > rest_start:
-            rest_periods.append(rest_end - rest_start)
+        rest_minutes = (rest_end - rest_start).total_seconds() / 60
+        rest_periods.append(rest_minutes)
 
-    # Add rest before first disturbance and after last
-    dygn_start = parse_time("07:00")
-    dygn_end = dygn_start + timedelta(days=1)
-    if times:
-        if times[0][0] > dygn_start:
-            rest_periods.append(times[0][0] - dygn_start)
-        if times[-1][1] < dygn_end:
-            rest_periods.append(dygn_end - times[-1][1])
-    else:
-        rest_periods.append(dygn_end - dygn_start)
-
-    # Find longest rest period
-    longest_rest = max(rest_periods) if rest_periods else timedelta(0)
-
-    # Calculate missing time to reach 11 hours
-    required_rest = timedelta(hours=11)
-    if longest_rest < required_rest:
-        return required_rest - longest_rest
-    else:
-        return timedelta(0)
+    longest_rest = max(rest_periods) if rest_periods else 0
+    missing_minutes = max(0, 11 * 60 - longest_rest)
+    return missing_minutes
 
 # Streamlit interface
-st.title("Beräkning av kompenserad vila enligt 11-timmarsregeln")
+st.title("Beräkning av kompenserad vila")
 
 num_days = st.number_input("Hur många dygn vill du registrera?", min_value=1, max_value=31, value=1)
-total_compensation = timedelta(0)
 
-for i in range(num_days):
-    st.subheader(f"Dygn {i+1}")
-    day_type = st.radio(f"Är detta en vardag eller helg?", ["Vardag", "Helg"], key=f"type_{i}")
+total_compensation = 0
+
+for day in range(num_days):
+    st.subheader(f"Dygn {day + 1}")
+    day_type = st.radio(f"Är detta en vardag eller helg?", ["Vardag", "Helg"], key=f"type_{day}")
+
+    intervals = []
+    num_intervals = st.number_input(f"Antal tidsintervall för dygn {day + 1}", min_value=1, max_value=10, value=1, key=f"num_{day}")
+    for i in range(num_intervals):
+        col1, col2 = st.columns(2)
+        with col1:
+            start = st.text_input(f"Starttid {i + 1} (HH:MM)", key=f"start_{day}_{i}")
+        with col2:
+            end = st.text_input(f"Sluttid {i + 1} (HH:MM)", key=f"end_{day}_{i}")
+        if start and end:
+            intervals.append((start, end))
 
     if day_type == "Vardag":
-        in_time = st.text_input("Tid IN (aktiv tid börjar)", key=f"in_{i}")
-        out_time = st.text_input("Tid UT (aktiv tid slutar)", key=f"out_{i}")
-        if in_time and out_time:
-            comp = calculate_weekday_compensation(in_time, out_time)
-            st.write(f"Kompensation för detta dygn: {comp}")
-            total_compensation += comp
-
+        minutes = calculate_weekday_overlap(intervals)
     else:
-        num_disturbances = st.number_input("Antal störningar under dygnet", min_value=0, max_value=10, value=0, key=f"dist_{i}")
-        start_times = []
-        end_times = []
-        for j in range(num_disturbances):
-            start = st.text_input(f"START tid för störning {j+1}", key=f"start_{i}_{j}")
-            end = st.text_input(f"SLUT tid för störning {j+1}", key=f"end_{i}_{j}")
-            if start and end:
-                start_times.append(start)
-                end_times.append(end)
-        if start_times and end_times:
-            comp = calculate_weekend_compensation(start_times, end_times)
-            st.write(f"Kompensation för detta dygn: {comp}")
-            total_compensation += comp
+        minutes = calculate_weekend_rest(intervals)
 
-# Subtract 4 hours from total compensation
-adjusted_compensation = total_compensation - timedelta(hours=4)
-if adjusted_compensation < timedelta(0):
-    adjusted_compensation = timedelta(0)
+    st.write(f"Kompenserad tid för dygn {day + 1}: {int(minutes)} minuter")
+    total_compensation += minutes
 
-st.markdown("---")
-st.write(f"**Total kompenserad tid efter avdrag av 4 timmar:** {adjusted_compensation}")
+# Subtract 4 hours (240 minutes)
+adjusted_total = max(0, total_compensation - 240)
+st.markdown(f"### Total kompenserad tid efter avdrag: {int(adjusted_total)} minuter")
