@@ -10,13 +10,7 @@ def parse_time(time_str):
 def calculate_weekday_overlap(start, end):
     night_start = parse_time("20:00")
     night_end = parse_time("07:00") + timedelta(days=1)
-    if end < start:
-        end += timedelta(days=1)
-    overlap_start = max(start, night_start)
-    overlap_end = min(end, night_end)
-    if overlap_end > overlap_start:
-        return (overlap_end - overlap_start).total_seconds() / 60
-    return 0
+    return (night_end - night_start).total_seconds() / 60  # Always 11 hours
 
 # Calculate longest rest period between intervals
 def calculate_weekend_rest(intervals):
@@ -47,8 +41,8 @@ for day in range(num_days):
     st.subheader(f"Dygn {day + 1}")
     day_type = st.radio(f"Typ av dygn {day + 1}", ["Vardag", "Helg"], key=f"type_{day}")
     intervals = []
-    num_intervals = st.number_input(f"Antal tidsintervall för dygn {day + 1}", min_value=1, max_value=10, value=1, key=f"num_{day}")
-    
+    num_intervals = st.number_input(f"Antal störningar för dygn {day + 1}", min_value=1, max_value=10, value=1, key=f"num_{day}")
+
     for i in range(num_intervals):
         col1, col2 = st.columns(2)
         with col1:
@@ -65,7 +59,7 @@ for day in range(num_days):
 
     if intervals:
         if day_type == "Vardag":
-            comp_minutes = sum(calculate_weekday_overlap(start, end) for start, end in intervals)
+            comp_minutes = calculate_weekday_overlap(parse_time("20:00"), parse_time("07:00"))
         else:
             comp_minutes = calculate_weekend_rest(intervals)
         st.write(f"Kompenserad tid för dygn {day + 1}: {format_minutes(comp_minutes)}")
