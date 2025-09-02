@@ -1,7 +1,6 @@
 
 import streamlit as st
 from datetime import datetime, timedelta
-import pandas as pd
 
 # Helper function to parse time strings
 def parse_time(time_str):
@@ -17,6 +16,14 @@ def calculate_weekday_overlap(start, end):
     overlap_end = min(end, night_end)
     if overlap_end > overlap_start:
         return (overlap_end - overlap_start).total_seconds() / 60
+    if start.time() >= night_start.time() or end.time() <= night_end.time():
+        # Adjust end time if it is before start (crosses midnight)
+        if end < start:
+            end += timedelta(days=1)
+        overlap_start = max(start, night_start)
+        overlap_end = min(end, night_end)
+        if overlap_end > overlap_start:
+            return (overlap_end - overlap_start).total_seconds() / 60
     return 0
 
 # Calculate longest rest period between intervals
@@ -43,14 +50,13 @@ st.title("Beräkning av kompenserad vila")
 num_days = st.number_input("Antal dygn att registrera", min_value=1, max_value=31, value=1)
 
 total_comp_minutes = 0
-results = []
 
 for day in range(num_days):
     st.subheader(f"Dygn {day + 1}")
     day_type = st.radio(f"Typ av dygn {day + 1}", ["Vardag", "Helg"], key=f"type_{day}")
     intervals = []
-    num_intervals = st.number_input(f"Antal störningar för dygn {day + 1}", min_value=1, max_value=10, value=1, key=f"num_{day}")
-
+    num_intervals = st.number_input(f"Antal tidsintervall för dygn {day + 1}", min_value=1, max_value=10, value=1, key=f"num_{day}")
+    
     for i in range(num_intervals):
         col1, col2 = st.columns(2)
         with col1:
@@ -72,25 +78,8 @@ for day in range(num_days):
             comp_minutes = calculate_weekend_rest(intervals)
         st.write(f"Kompenserad tid för dygn {day + 1}: {format_minutes(comp_minutes)}")
         total_comp_minutes += comp_minutes
-        results.append({
-            "Dygn": day + 1,
-            "Typ": day_type,
-            "Kompenserad tid (min)": int(comp_minutes),
-            "Kompenserad tid": format_minutes(comp_minutes)
-        })
 
 # Subtract 4 hours (240 minutes)
 adjusted_minutes = max(0, total_comp_minutes - 240)
 st.markdown("---")
 st.write(f"**Total kompenserad tid (efter avdrag av 4 timmar): {format_minutes(adjusted_minutes)}**")
-
-# Export to Excel
-if results:
-    df = pd.DataFrame(results)
-    df.loc[len(df.index)] = ["Totalt", "", int(total_comp_minutes), format_minutes(total_comp_minutes)]
-    df.loc[len(df.index)] = ["Justerat (efter avdrag)", "", int(adjusted_minutes), format_minutes(adjusted_minutes)]
-    excel_file = "kompensation.xlsx"
-    df.to_excel(excel_file, index=False)
-
-    with open(excel_file, "rb") as f:
-        st.download_button("Ladda ner resultat som Excel", f, file_name=excel_file)
