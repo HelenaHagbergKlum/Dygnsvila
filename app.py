@@ -2,7 +2,6 @@
 import streamlit as st
 from datetime import datetime, timedelta
 import pandas as pd
-from io import BytesIO
 
 # Helper function to parse time strings
 def parse_time(time_str):
@@ -76,7 +75,7 @@ for day in range(num_days):
         results.append({
             "Dygn": day + 1,
             "Typ": day_type,
-            "Kompenserad tid (min)": comp_minutes,
+            "Kompenserad tid (min)": int(comp_minutes),
             "Kompenserad tid": format_minutes(comp_minutes)
         })
 
@@ -88,9 +87,10 @@ st.write(f"**Total kompenserad tid (efter avdrag av 4 timmar): {format_minutes(a
 # Export to Excel
 if results:
     df = pd.DataFrame(results)
-    df.loc[len(df.index)] = ["Totalt", "", total_comp_minutes, format_minutes(total_comp_minutes)]
-    df.loc[len(df.index)] = ["Justerat (efter avdrag)", "", adjusted_minutes, format_minutes(adjusted_minutes)]
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name="Kompensation")
-    st.download_button("Ladda ner resultat som Excel", data=output.getvalue(), file_name="kompensation.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    df.loc[len(df.index)] = ["Totalt", "", int(total_comp_minutes), format_minutes(total_comp_minutes)]
+    df.loc[len(df.index)] = ["Justerat (efter avdrag)", "", int(adjusted_minutes), format_minutes(adjusted_minutes)]
+    excel_file = "kompensation.xlsx"
+    df.to_excel(excel_file, index=False)
+
+    with open(excel_file, "rb") as f:
+        st.download_button("Ladda ner resultat som Excel", f, file_name=excel_file)
