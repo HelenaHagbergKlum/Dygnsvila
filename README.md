@@ -1,2 +1,0 @@
-# Dygnsvila
-Uträkning av dygnsvila
