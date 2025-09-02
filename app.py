@@ -1,0 +1,152 @@
+import streamlit as st
+from datetime import datetime, timedelta
+import pandas as pd
+from io import BytesIO
+
+# --- Hjälpfunktioner ---
+
+def parse_time(time_str: str) -> datetime:
+    """Returnerar ett datetime-objekt (1900-01-01) från HH:MM-sträng."""
+    return datetime.strptime(time_str, "%H:%M")
+
+def normalize_interval(start: datetime, end: datetime) -> tuple:
+    """Säkerställer att sluttiden alltid är efter start (hanterar över midnatt)."""
+    if end <= start:
+        end += timedelta(days=1)
+    return start, end
+
+def calculate_weekday_overlap(start: datetime, end: datetime) -> float:
+    """Beräkna överlappning med nattvilan (20:00–07:00)."""
+    night_start = parse_time("20:00")
+    night_end = parse_time("07:00") + timedelta(days=1)
+
+    start, end = normalize_interval(start, end)
+
+    overlap_start = max(start, night_start)
+    overlap_end = min(end, night_end)
+    if overlap_end > overlap_start:
+        return (overlap_end - overlap_start).total_seconds() / 60
+    return 0
+
+def calculate_weekend_rest(intervals: list) -> float:
+    """Beräkna kompensationstid under helg utifrån längsta sammanhängande vila."""
+    intervals = [normalize_interval(s, e) for s, e in intervals]
+    intervals.sort()
+
+    rest_periods = []
+    previous_end = parse_time("07:00")
+
+    for start, end in intervals:
+        rest_periods.append((start - previous_end).total_seconds() / 60)
+        previous_end = end
+
+    rest_periods.append((parse_time("07:00") + timedelta(days=1) - previous_end).total_seconds() / 60)
+
+    longest_rest = max(rest_periods)
+    missing_minutes = max(0, 11 * 60 - longest_rest)
+    return missing_minutes
+
+def format_minutes(minutes: float) -> str:
+    """Formatera minuter som h m."""
+    hours = int(minutes // 60)
+    mins = int(minutes % 60)
+    return f"{hours}h {mins}m"
+
+def to_excel_bytes(df: pd.DataFrame) -> BytesIO:
+    """Returnera en Excel-fil i minnet för nedladdning."""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False)
+    return output.getvalue()
+
+# --- Streamlit-app ---
+
+st.title("Beräkning av kompenserad vila")
+num_days = st.number_input("Antal dygn att registrera", min_value=1, max_value=31, value=1)
+
+total_comp_minutes = 0
+results = []
+
+for day in range(num_days):
+    st.subheader(f"Dygn {day + 1}")
+    day_type = st.radio(f"Typ av dygn {day + 1}", ["Vardag", "Helg"], key=f"type_{day}")
+    intervals = []
+    num_intervals = st.number_input(
+        f"Antal störningar för dygn {day + 1}",
+        min_value=1,
+        max_value=10,
+        value=1,
+        key=f"num_{day}"
+    )
+
+    for i in range(num_intervals):
+        col1, col2 = st.columns(2)
+        with col1:
+            start_str = st.text_input(f"Starttid {i+1} (HH:MM)", key=f"start_{day}_{i}")
+        with col2:
+            end_str = st.text_input(f"Sluttid {i+1} (HH:MM)", key=f"end_{day}_{i}")
+
+        if start_str and end_str:
+            try:
+                start = parse_time(start_str)
+                end = parse_time(end_str)
+                intervals.append(normalize_interval(start, end))
+            except ValueError:
+                st.error("Fel format på tid. Använd HH:MM.")
+
+    if intervals:
+        if day_type == "Vardag":
+            comp_minutes = sum(calculate_weekday_overlap(start, end) for start, end in intervals)
+        else:
+            comp_minutes = calculate_weekend_rest(intervals)
+
+        total_comp_minutes += comp_minutes
+
+        total_storning = sum(
+            (end - start).total_seconds() / 60 for start, end in intervals
+        )
+
+        st.write(f"Kompenserad tid för dygn {day + 1}: {format_minutes(comp_minutes)}")
+        st.write(f"Total störningstid för dygn {day + 1}: {format_minutes(total_storning)}")
+
+        results.append({
+            "Dygn": day + 1,
+            "Typ": day_type,
+            "Kompenserad tid (min)": round(comp_minutes),
+            "Kompenserad tid": format_minutes(comp_minutes),
+            "Störningstid (min)": round(total_storning),
+            "Störningstid": format_minutes(total_storning)
+        })
+
+# --- Summering ---
+adjusted_minutes = max(0, total_comp_minutes - 240)
+st.markdown("---")
+st.write(f"**Total kompenserad tid (efter avdrag av 4 timmar): {format_minutes(adjusted_minutes)}**")
+
+
+if results:
+    df = pd.DataFrame(results)
+    df.loc[len(df.index)] = {
+        "Dygn": "Summa",
+        "Typ": "",
+        "Kompenserad tid (min)": round(total_comp_minutes),
+        "Kompenserad tid": format_minutes(total_comp_minutes),
+        "Störningstid (min)": round(sum(r["Störningstid (min)"] for r in results)),
+        "Störningstid": format_minutes(sum(r["Störningstid (min)"] for r in results))
+    }
+    df.loc[len(df.index)] = {
+        "Dygn": "Justering",
+        "Typ": "",
+        "Kompenserad tid (min)": round(adjusted_minutes),
+        "Kompenserad tid": format_minutes(adjusted_minutes),
+        "Störningstid (min)": "",
+        "Störningstid": ""
+    }
+
+    excel_data = to_excel_bytes(df)
+    st.download_button(
+        "Ladda ner resultat som Excel",
+        data=excel_data,
+        file_name="kompensation.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
